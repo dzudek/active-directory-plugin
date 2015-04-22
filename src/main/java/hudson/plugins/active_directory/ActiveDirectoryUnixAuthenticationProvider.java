@@ -277,15 +277,9 @@ public class ActiveDirectoryUnixAuthenticationProvider extends AbstractActiveDir
                         // locate this user's record
                         final String domainDN = toDC(domainName);
 
-                        Attributes user = new LDAPSearchBuilder(context, domainDN).subTreeScope().searchOne("(& (userPrincipalName={0})(objectCategory=user))", userPrincipalName);
+                        Attributes user = new LDAPSearchBuilder(context, domainDN).subTreeScope().searchOne("(& (sAMAccountName={0})(objectCategory=user))", samAccountName);
                         if (user == null) {
-                            // failed to find it. Fall back to sAMAccountName.
-                            // see http://www.nabble.com/Re%3A-Hudson-AD-plug-in-td21428668.html
-                            LOGGER.log(Level.FINE, "Failed to find {0} in userPrincipalName. Trying sAMAccountName", userPrincipalName);
-                            user = new LDAPSearchBuilder(context, domainDN).subTreeScope().searchOne("(& (sAMAccountName={0})(objectCategory=user))", samAccountName);
-                            if (user == null) {
-                                throw new UsernameNotFoundException("Authentication was successful but cannot locate the user information for " + username);
-                            }
+                            throw new UsernameNotFoundException("Authentication was successful but cannot locate the user information for " + username);
                         }
                         LOGGER.fine("Found user " + username + " : " + user);
 
@@ -512,57 +506,7 @@ public class ActiveDirectoryUnixAuthenticationProvider extends AbstractActiveDir
         parseMembers(userDN, groups, renum);
         renum.close();
 
-        {/*
-            stage 2: use memberOf to find groups that aren't picked up by tokenGroups.
-            This includes distribution groups
-        */
-            LOGGER.fine("Stage 2: looking up via memberOf");
-
-            while (true) {
-                switch (groupLookupStrategy) {
-                case AUTO:
-                    // try the accurate one first, and if it's too slow fall back to recursive in the hope that it's faster
-                    long start = System.nanoTime();
-                    boolean found = false;
-                    long duration = 0;
-                    try {
-                        found = chainGroupLookup(domainDN, userDN, context, groups);
-                        duration = TimeUnit2.NANOSECONDS.toSeconds(System.nanoTime() - start);
-                    } catch (TimeLimitExceededException e) {
-                        LOGGER.log(Level.WARNING, "The LDAP request did not terminate within the specified time limit. AD will fall back to recursive lookup", e);
-                    } catch (NamingException e) {
-                        if (e.getMessage().contains("LDAP response read timed out")) {
-                            LOGGER.log(Level.WARNING, "LDAP response read time out. AD will fall back to recursive lookup", e);
-                        } else {
-                            throw e;
-                        }
-                    }
-                    if (!found && duration >= 10) {
-                        LOGGER.log(Level.WARNING, "Group lookup via Active Directory's 'LDAP_MATCHING_RULE_IN_CHAIN' extension timed out after {0} seconds. Falling back to recursive group lookup strategy for this and future queries", duration);
-                        groupLookupStrategy = GroupLookupStrategy.RECURSIVE;
-                        continue;
-                    } else if (found && duration >= 10) {
-                        LOGGER.log(Level.WARNING, "Group lookup via Active Directory's 'LDAP_MATCHING_RULE_IN_CHAIN' extension matched user's groups but took {0} seconds to run. Switching to recursive lookup for future group lookup queries", duration);
-                        groupLookupStrategy = GroupLookupStrategy.RECURSIVE;
-                        return groups;
-                    } else if (!found) {
-                        LOGGER.log(Level.WARNING, "Group lookup via Active Directory's 'LDAP_MATCHING_RULE_IN_CHAIN' extension failed. Falling back to recursive group lookup strategy for this and future queries");
-                        groupLookupStrategy = GroupLookupStrategy.RECURSIVE;
-                        continue;
-                    } else {
-                        // it run fast enough, so let's stick to it
-                        groupLookupStrategy = GroupLookupStrategy.CHAIN;
-                        return groups;
-                    }
-                case RECURSIVE:
-                    recursiveGroupLookup(context, id, groups);
-                    return groups;
-                case CHAIN:
-                    chainGroupLookup(domainDN, userDN, context, groups);
-                    return groups;
-                }
-            }
-        }
+        return groups;
     }
 
     /**
